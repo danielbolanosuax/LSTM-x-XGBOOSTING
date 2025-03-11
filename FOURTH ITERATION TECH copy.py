@@ -24,7 +24,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 import plotly.graph_objects as go
 import yfinance as yf
 import warnings
-warnings.filterwarnings('ignore')  # Para suprimir algunas advertencias de librerías
+warnings.filterwarnings('ignore')  # Suprimir advertencias
 
 
 ## ===============================
@@ -50,7 +50,7 @@ def obtener_datos_alpha_vantage(ticker, api_key, intentos=5):
 ## ===============================
 ##        DESCARGA DE DATOS
 ## ===============================
-ticker = 'NVDA'
+ticker = 'RDDT'
 start_date = datetime.datetime(2022, 1, 1)
 
 data = obtener_datos_alpha_vantage(ticker, ALPHA_VANTAGE_API_KEY)
@@ -392,15 +392,41 @@ else:
 
 
 ## ===============================
-##   NUEVA CONDICIÓN DE COMPRA
+##   NUEVAS CONDICIONES DE SEÑALES SEGÚN NIVELES DE RIESGO
+## (Se han implementado tres niveles: Menos Riesgo, Riesgo Medio y Alto Riesgo)
 ## ===============================
-buy_signal = (data['RSI'] < 30) & \
-             (data['%K'] < 20) & \
-             (data['MACD'] < -5) & \
-             (data['Valoración'] < 2.5) & \
-             (data['OBV'].diff() > 0)
-data['Señal_Compra'] = 0
-data.loc[buy_signal, 'Señal_Compra'] = 1
+
+# Condiciones para señal de Menos Riesgo (la base, menor riesgo)
+cond_menos_riesgo = (
+    (data['RSI'] >= 25) & (data['RSI'] < 30) &
+    (data['%K'] >= 20) & (data['%K'] < 30) &
+    (data['MACD'] >= -5) & (data['MACD'] < -3) &
+    (data['Valoración'] < 1) &
+    (data['OBV'].diff() > 0)
+)
+
+# Condiciones para señal de Riesgo Medio
+cond_riesgo_medio = (
+    (data['RSI'] >= 30) & (data['RSI'] < 33) &
+    (data['%K'] >= 30) & (data['%K'] < 35) &
+    (data['MACD'] >= -5) & (data['MACD'] < -3) &
+    (data['Valoración'] < 1) &
+    (data['OBV'].diff() > 0)
+)
+
+# Condiciones para señal de Alto Riesgo (más agresiva)
+cond_riesgo_alto = (
+    (data['RSI'] >= 20) & (data['RSI'] < 25) &
+    (data['%K'] >= 15) & (data['%K'] < 25) &
+    (data['MACD'] >= -7) & (data['MACD'] < -5) &
+    (data['Valoración'] < 1) &
+    (data['OBV'].diff() > 0)
+)
+
+# Asignación de las señales en columnas separadas
+data['Señal_Menos_Riesgo'] = cond_menos_riesgo.astype(int)
+data['Señal_Riesgo_Medio'] = cond_riesgo_medio.astype(int)
+data['Señal_Riesgo_Alto'] = cond_riesgo_alto.astype(int)
 
 
 ## ===============================
@@ -429,13 +455,27 @@ fig.add_trace(go.Scatter(
     marker=dict(size=10, color='blue', symbol='triangle-down'), 
     name='Salida de Capital'
 ))
-# Agregar señales de compra
+# Agregar señales de compra basadas en los nuevos niveles de riesgo
 fig.add_trace(go.Scatter(
-    x=data.index[data['Señal_Compra'] == 1], 
-    y=data['Close'][data['Señal_Compra'] == 1], 
+    x=data.index[data['Señal_Menos_Riesgo'] == 1], 
+    y=data['Close'][data['Señal_Menos_Riesgo'] == 1], 
     mode='markers', 
     marker=dict(size=10, color='yellow', symbol='triangle-up'), 
-    name='Señal de Compra'
+    name='Señal Menos Riesgo'
+))
+fig.add_trace(go.Scatter(
+    x=data.index[data['Señal_Riesgo_Medio'] == 1], 
+    y=data['Close'][data['Señal_Riesgo_Medio'] == 1], 
+    mode='markers', 
+    marker=dict(size=10, color='orange', symbol='triangle-up'), 
+    name='Señal Riesgo Medio'
+))
+fig.add_trace(go.Scatter(
+    x=data.index[data['Señal_Riesgo_Alto'] == 1], 
+    y=data['Close'][data['Señal_Riesgo_Alto'] == 1], 
+    mode='markers', 
+    marker=dict(size=10, color='magenta', symbol='triangle-up'), 
+    name='Señal Alto Riesgo'
 ))
 fig.update_layout(
     title=f'Señales Institucionales para {ticker}',
