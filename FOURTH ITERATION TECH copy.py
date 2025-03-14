@@ -50,8 +50,8 @@ def obtener_datos_alpha_vantage(ticker, api_key, intentos=5):
 ## ===============================
 ##        DESCARGA DE DATOS
 ## ===============================
-ticker = 'RDDT'
-start_date = datetime.datetime(2022, 1, 1)
+ticker = 'TTD'
+start_date = datetime.datetime(2023, 1, 1)
 
 data = obtener_datos_alpha_vantage(ticker, ALPHA_VANTAGE_API_KEY)
 data = data.loc[data.index >= start_date]
@@ -89,7 +89,7 @@ data['Institutional_Index'] = data['Volume'] / data['Volume_MA_50']
 data['OBV'] = (np.sign(data['Close'].diff()) * data['Volume']).fillna(0).cumsum()
 
 # --- Definir Entrada y Salida de Capital basados en umbrales ---
-entrada_umbral = 2.0
+entrada_umbral = 1.5
 salida_umbral = 0.5
 data['Entrada_Capital'] = (data['Institutional_Index'] > entrada_umbral).astype(int)
 data['Salida_Capital'] = (data['Institutional_Index'] < salida_umbral).astype(int)
