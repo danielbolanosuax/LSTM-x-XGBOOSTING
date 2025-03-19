@@ -30,7 +30,7 @@ def obtener_datos_alpha_vantage(ticker, api_key):
     return data
 
 # 📌 Configuración
-ticker = 'MSFT'
+ticker = 'TTD'
 start_date = datetime.datetime(2020, 1, 1)
 
 print(f"Descargando datos para {ticker} desde Alpha Vantage...")

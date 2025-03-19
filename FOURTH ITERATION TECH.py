@@ -42,8 +42,8 @@ def obtener_datos_alpha_vantage(ticker, api_key, intentos=5):
 
 
 ## 📌 Configuración del Ticker y rango de fechas, y descarga de datos
-ticker = 'RDDT'
-start_date = datetime.datetime(2022, 1, 1)
+ticker = 'TTD'
+start_date = datetime.datetime(2020, 1, 1)
 
 data = obtener_datos_alpha_vantage(ticker, ALPHA_VANTAGE_API_KEY)
 data = data.loc[data.index >= start_date]
