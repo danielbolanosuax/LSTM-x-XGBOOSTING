@@ -10,7 +10,7 @@ pd.set_option('display.max_columns', None)
 # --- CONFIGURACIÓN INICIAL ---
 # API key y símbolo actualizados
 api_key = '6XE23J2QP58EE8L7'
-symbol = 'NVDA'
+symbol = 'AAPL'
 
 # Descargar datos históricos (diarios)
 ts = TimeSeries(key=api_key, output_format='pandas')
@@ -79,6 +79,10 @@ condiciones = {
 # Definir horizontes de análisis en días
 horizontes = {'5': 5, '45': 45, '200': 200, '600': 600}
 
+# Precio final (último precio disponible en el histórico)
+precio_final = data.iloc[-1]['Close']
+fecha_final = data.index[-1]  # Fecha final utilizada para el cálculo del retorno_general
+
 # Diccionario para almacenar los resultados por indicador
 resultados_indicadores = {}
 
@@ -92,9 +96,10 @@ for indicador, condicion in condiciones.items():
         # Verificar que existan suficientes datos para el mayor horizonte
         if len(datos_evento) > max(horizontes.values()):
             precio_inicial = datos_evento.iloc[0]['Close']
-            # Se añade la columna 'tipo_indicador' y 'ticker' en cada registro
+            # Se añade la columna 'tipo_indicador', 'ticker', 'fecha_evento' y 'fecha_final' en cada registro
             registro = {
                 'fecha_evento': fecha,
+                'fecha_final': fecha_final,
                 'precio_inicial': precio_inicial,
                 'tipo_indicador': indicador,
                 'ticker': symbol
@@ -104,6 +109,8 @@ for indicador, condicion in condiciones.items():
                 precio_periodo = datos_evento.iloc[dias]['Close']
                 rendimiento = (precio_periodo - precio_inicial) / precio_inicial
                 registro[f'retorno_{etiqueta}'] = rendimiento
+            # Calcular el rendimiento general desde el momento de la operación hasta el último precio disponible
+            registro['retorno_general'] = (precio_final - precio_inicial) / precio_inicial
             eventos_resultados.append(registro)
     # Convertir la lista de registros en un DataFrame para el indicador actual
     resultados_indicadores[indicador] = pd.DataFrame(eventos_resultados)
@@ -134,13 +141,18 @@ print("\nLos resultados se han guardado en 'resultados_indicadores.xlsx'.")
 # Cargar el archivo Excel con los resultados (ya actualizado)
 df_total = pd.read_excel(excel_file)
 
-# Resumen estadístico agrupado por tipo de indicador
+# Resumen estadístico agrupado por tipo de indicador, incluyendo retorno_general
 resumen = df_total.groupby('tipo_indicador').agg({
     'retorno_5': ['mean', 'median', 'std'],
     'retorno_45': ['mean', 'median', 'std'],
     'retorno_200': ['mean', 'median', 'std'],
     'retorno_600': ['mean', 'median', 'std'],
+    'retorno_general': ['mean', 'median', 'std'],
     'fecha_evento': 'count'  # número de eventos
 })
+
+# Calcular el %VAR para retorno_general como (std/mean)*100
+resumen[('retorno_general', '%var')] = resumen[('retorno_general', 'std')] / resumen[('retorno_general', 'mean')] * 100
+
 print("\nResumen estadístico agrupado por tipo de indicador:")
 print(resumen)
