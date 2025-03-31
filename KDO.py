@@ -1,6 +1,7 @@
 from alpha_vantage.timeseries import TimeSeries
 import pandas as pd
 import ta
+import os
 
 # Configurar pandas para mostrar todas las filas y columnas sin truncar
 pd.set_option('display.max_rows', None)
@@ -9,7 +10,7 @@ pd.set_option('display.max_columns', None)
 # --- CONFIGURACIÓN INICIAL ---
 # API key y símbolo actualizados
 api_key = '6XE23J2QP58EE8L7'
-symbol = 'TTWO'
+symbol = 'NVDA'
 
 # Descargar datos históricos (diarios)
 ts = TimeSeries(key=api_key, output_format='pandas')
@@ -89,10 +90,15 @@ for indicador, condicion in condiciones.items():
         # Extraer datos a partir del día de la señal
         datos_evento = data.loc[fecha:]
         # Verificar que existan suficientes datos para el mayor horizonte
-        if len(datos_evento) >= max(horizontes.values()):
+        if len(datos_evento) > max(horizontes.values()):
             precio_inicial = datos_evento.iloc[0]['Close']
-            # CAMBIO: Se añade la columna 'tipo_indicador' en cada registro
-            registro = {'fecha_evento': fecha, 'precio_inicial': precio_inicial, 'tipo_indicador': indicador}
+            # Se añade la columna 'tipo_indicador' y 'ticker' en cada registro
+            registro = {
+                'fecha_evento': fecha,
+                'precio_inicial': precio_inicial,
+                'tipo_indicador': indicador,
+                'ticker': symbol
+            }
             # Calcular el rendimiento para cada horizonte
             for etiqueta, dias in horizontes.items():
                 precio_periodo = datos_evento.iloc[dias]['Close']
@@ -113,6 +119,28 @@ for indicador, df_resultados in resultados_indicadores.items():
 # --- EXPORTAR A .XLSX ---
 # Se combinan todos los DataFrames en uno solo
 df_total = pd.concat(resultados_indicadores.values(), ignore_index=True)
-# Exportar a un archivo Excel
-df_total.to_excel('resultados_indicadores.xlsx', index=False)
+
+# Si el archivo ya existe, cargar los datos existentes y concatenarlos con los nuevos
+excel_file = 'resultados_indicadores.xlsx'
+if os.path.exists(excel_file):
+    df_existente = pd.read_excel(excel_file)
+    df_total = pd.concat([df_existente, df_total], ignore_index=True)
+
+# Exportar a un archivo Excel sin sobrescribir los datos previos
+df_total.to_excel(excel_file, index=False)
 print("\nLos resultados se han guardado en 'resultados_indicadores.xlsx'.")
+
+# --- RESUMEN ESTADÍSTICO ---
+# Cargar el archivo Excel con los resultados (ya actualizado)
+df_total = pd.read_excel(excel_file)
+
+# Resumen estadístico agrupado por tipo de indicador
+resumen = df_total.groupby('tipo_indicador').agg({
+    'retorno_5': ['mean', 'median', 'std'],
+    'retorno_45': ['mean', 'median', 'std'],
+    'retorno_200': ['mean', 'median', 'std'],
+    'retorno_600': ['mean', 'median', 'std'],
+    'fecha_evento': 'count'  # número de eventos
+})
+print("\nResumen estadístico agrupado por tipo de indicador:")
+print(resumen)
