@@ -10,7 +10,7 @@ pd.set_option('display.max_columns', None)
 # --- CONFIGURACIÓN INICIAL ---
 # API key y símbolo actualizados
 api_key = '6XE23J2QP58EE8L7'
-symbol = 'AAPL'
+symbol = 'ABT'  
 
 # Descargar datos históricos (diarios)
 ts = TimeSeries(key=api_key, output_format='pandas')
@@ -156,3 +156,69 @@ resumen[('retorno_general', '%var')] = resumen[('retorno_general', 'std')] / res
 
 print("\nResumen estadístico agrupado por tipo de indicador:")
 print(resumen)
+
+# --- TABLA DE RENDIMIENTOS MENSUALES POR AÑO ---
+
+# Asegurarnos de que el índice del DataFrame sea de tipo datetime
+data.index = pd.to_datetime(data.index)
+data.sort_index(inplace=True)
+
+# 1. Obtenemos el último precio de cierre de cada mes
+monthly_close = data['Close'].resample('M').last()
+
+# 2. Calculamos el rendimiento mensual (pct_change() da el porcentaje de variación)
+monthly_returns = monthly_close.pct_change().dropna()  # El primer mes será NaN, por eso dropna()
+
+# 3. Convertimos a DataFrame y extraemos columnas de año y mes
+df_monthly = pd.DataFrame({'MonthlyReturn': monthly_returns})
+df_monthly['Year'] = df_monthly.index.year
+df_monthly['Month'] = df_monthly.index.month
+
+# 4. Creamos la tabla dinámica con los años como índice y los meses como columnas
+monthly_pivot = df_monthly.pivot(index='Year', columns='Month', values='MonthlyReturn')
+
+# Renombramos las columnas numéricas del 1 al 12 por los nombres de meses en español
+nombre_meses = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC']
+monthly_pivot.columns = nombre_meses[:len(monthly_pivot.columns)]
+
+# 5. Agregamos una columna 'TOTAL' con el rendimiento acumulado anual
+#    Para ello, se multiplica (1 + cada retorno mensual) y luego se resta 1
+monthly_pivot['TOTAL'] = (1 + monthly_pivot).prod(axis=1) - 1
+
+# 6. Formateamos los datos como porcentajes
+monthly_pivot = monthly_pivot.fillna(0)  # Si hay meses sin datos, rellenamos con 0
+formatted_pivot = monthly_pivot.applymap(lambda x: f"{x*100:.2f}%")
+
+# 7. Imprimimos la tabla final
+print("\nTabla de rendimientos mensuales por año:")
+print(formatted_pivot)
+
+# --- GUARDAR TABLA DE RENDIMIENTOS MENSUALES EN HISTORICO_TICKERS.XLSX ---
+
+# Convertimos el pivot (monthly_pivot) en un DataFrame y reiniciamos el índice para que 'Year' sea una columna.
+df_hist = monthly_pivot.reset_index()
+df_hist.rename(columns={'index': 'Año'}, inplace=True)  # En caso de que el índice se llame 'index'
+
+# Si la columna 'TOTAL' existe y no se requiere, la eliminamos
+if 'TOTAL' in df_hist.columns:
+    df_hist = df_hist.drop(columns=['TOTAL'])
+
+# Renombramos la columna de año a 'Año' (por si no lo estuviera) y añadimos la columna 'Ticker'
+df_hist.rename(columns={'Year': 'Año'}, inplace=True)
+df_hist.insert(1, 'Ticker', symbol)
+
+# Aseguramos el orden de las columnas: AÑO, TICKER, y luego los meses de ENE a DIC
+columnas_deseadas = ['Año', 'Ticker', 'ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC']
+df_hist = df_hist.reindex(columns=columnas_deseadas)
+
+# Si ya existe el archivo, cargamos los datos existentes y los concatenamos con los nuevos.
+historico_file = 'historico_tickers.xlsx'
+if os.path.exists(historico_file):
+    df_existente = pd.read_excel(historico_file)
+    df_combined = pd.concat([df_existente, df_hist], ignore_index=True)
+else:
+    df_combined = df_hist
+
+# Guardamos el DataFrame combinado en el archivo Excel.
+df_combined.to_excel(historico_file, index=False)
+print("\nLa tabla de rendimientos mensuales se ha guardado en 'historico_tickers.xlsx'.")
