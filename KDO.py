@@ -10,7 +10,7 @@ pd.set_option('display.max_columns', None)
 # --- CONFIGURACIÓN INICIAL ---
 # API key y símbolo actualizados
 api_key = '6XE23J2QP58EE8L7'
-symbol = 'ABT'  
+symbol = 'PLTR'  
 
 # Descargar datos históricos (diarios)
 ts = TimeSeries(key=api_key, output_format='pandas')
