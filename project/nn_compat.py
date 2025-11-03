@@ -1,16 +1,10 @@
 # path: project/nn_compat.py
-"""
-Capa de compatibilidad Keras:
-- Prefiere tf.keras (TensorFlow 2.x)
-- Si no hay TF, intenta keras 3 (requiere KERAS_BACKEND=tensorflow)
-- Mensaje claro si falta backend. 
-"""
 from __future__ import annotations
 
 _BACKEND = None
 
 try:
-    import tensorflow as tf  # valida TF
+    import tensorflow as tf  # noqa: F401
     from tensorflow.keras import models as _models
     from tensorflow.keras import layers as _layers
     from tensorflow.keras import optimizers as _optimizers
@@ -26,11 +20,9 @@ except Exception:
         _BACKEND = "keras"
     except Exception as e:
         raise ImportError(
-            "No hay backend Keras disponible.\n"
-            "Instala uno:\n"
-            "  python -m pip install tensorflow==2.20.*\n"
-            "o\n"
-            "  python -m pip install keras==3.*  (y exporta KERAS_BACKEND=tensorflow)"
+            "No hay backend Keras.\n"
+            "Instala TensorFlow 2.x:  python -m pip install tensorflow==2.20.*\n"
+            "o Keras 3 (con backend tensorflow)."
         ) from e
 
 Sequential = _models.Sequential

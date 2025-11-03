@@ -12,29 +12,23 @@ from typing import Optional, Tuple, Iterable, Dict, List
 import numpy as np
 import pandas as pd
 
-# ===== ML / métricas =====
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     roc_auc_score, average_precision_score
 )
 
-# ==== Keras/TensorFlow compat (tf.keras o keras 3) ====
+# Keras compat (por qué: evitar fricción entre tf.keras/keras3)
 try:
-    from project.nn_compat import Sequential, LSTM, Dense, Dropout, Adam, EarlyStopping  # preferido
+    from project.nn_compat import Sequential, LSTM, Dense, Dropout, Adam, EarlyStopping
 except Exception:
-    try:
-        from nn_compat import Sequential, LSTM, Dense, Dropout, Adam, EarlyStopping    # fallback local
-    except Exception:
-        # último recurso directo (si TF ya está)
-        from tensorflow.keras.models import Sequential
-        from tensorflow.keras.layers import LSTM, Dense, Dropout
-        from tensorflow.keras.optimizers import Adam
-        from tensorflow.keras.callbacks import EarlyStopping
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+    from tensorflow.keras.optimizers import Adam
+    from tensorflow.keras.callbacks import EarlyStopping
 
 import xgboost as xgb
 
-# ====== Datos ======
 try:
     import yfinance as yf
 except Exception:
@@ -44,14 +38,12 @@ try:
 except Exception:
     TimeSeries = None
 
-# ====== RL ======
 try:
     import gym
     from gym import spaces
 except Exception:
     gym = None
 
-# ====== Reporting (matplotlib) ======
 import matplotlib.pyplot as plt
 from sklearn.metrics import (
     roc_curve, auc, precision_recall_curve, average_precision_score,
@@ -72,27 +64,25 @@ class Config:
     window: int = 60
     horizon: int = 20
     barrier_mult: float = 2.0
-    scaler_type: str = "standard"  # standard|minmax
+    scaler_type: str = "standard"
     test_splits: int = 5
     gap: int = 3
-    # Costs
     fees_bps: float = 5.0
     slippage_bps: float = 5.0
-    # ML
     proba_threshold: float = 0.6
     seed: int = 42
-    # RL
     rl_lambda_risk: float = 0.0
     rl_steps: int = 200_000
     action_smooth_tau: float = 0.2
     max_pos_change: float = 0.3
     vol_target: float = 0.2
-    # IO
     alpha_vantage_key_env: str = "ALPHA_VANTAGE_KEY"
-    # ===== Bulls vs Bears (TradingView) =====
+    # Bulls vs Bears params
     bvb_len: int = 14
     bvb_bars_back: int = 120
     bvb_tline: float = 80.0
+    # CLI flags
+    plot_bvb: bool = False  # por qué: permitir inspección visual
 
 
 def set_seeds(seed: int) -> None:
@@ -161,11 +151,7 @@ def stochastic_kd(high: pd.Series, low: pd.Series, close: pd.Series, n: int = 14
     return k, d
 
 
-def obsoleted(*_args, **_kwargs):
-    pass  # marcador de indicadores retirados
-
-
-# ======== Bulls vs Bears (traducción Pine v4) ========
+# ======== Bulls vs Bears ========
 def bulls_bears(
     close: pd.Series,
     high: pd.Series,
@@ -174,11 +160,8 @@ def bulls_bears(
     bars_back: int,
 ) -> Tuple[pd.Series, pd.Series, pd.Series]:
     """
-    Calcula Bulls vs Bears:
-      - bulls = high - EMA(close, len)
-      - bears = EMA(close, len) - low
-      - normalizados por ventana 'bars_back' a [-100, 100]
-      - total = norm_bulls - norm_bears
+    Traducción Pine v4: normaliza bulls/bears a [-100,100] en ventana 'bars_back'.
+    'total' = norm_bulls - norm_bears.
     """
     ma = ema(close, length)
     bulls = high - ma
@@ -213,7 +196,6 @@ def add_features(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     out["Volatility20"] = out["LogRet"].rolling(20).std().fillna(0)
     out["InstIdx"] = institutional_index(out["Volume"], 50)
 
-    # ===== Bulls vs Bears =====
     bvb_total, bvb_nb, bvb_nr = bulls_bears(
         close=out["Close"], high=out["High"], low=out["Low"],
         length=cfg.bvb_len, bars_back=cfg.bvb_bars_back
@@ -221,7 +203,6 @@ def add_features(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     out["BvB_Total"] = bvb_total
     out["BvB_NormBulls"] = bvb_nb
     out["BvB_NormBears"] = bvb_nr
-    # Señales por si quieres inspeccionar/plotear (no usadas como label)
     out["BvB_Bullish"] = (out["BvB_Total"] > cfg.bvb_tline).astype(int)
     out["BvB_Bearish"] = (out["BvB_Total"] < -cfg.bvb_tline).astype(int)
 
@@ -292,7 +273,7 @@ def make_sequences(X: np.ndarray, y: np.ndarray, window: int) -> Tuple[np.ndarra
 def build_lstm(input_timesteps: int, input_features: int, lr: float = 1e-3) -> Sequential:
     model = Sequential([
         LSTM(128, return_sequences=True, input_shape=(input_timesteps, input_features)),
-        Dropout(0.2),  # por qué: reducir sobreajuste
+        Dropout(0.2),  # por qué: reduce sobreajuste
         LSTM(64),
         Dropout(0.2),
         Dense(1, activation="sigmoid")
@@ -399,8 +380,7 @@ def backtest_long_only(close: pd.Series, proba: pd.Series,
 # =======================
 class TradingEnvCont(gym.Env if gym is not None else object):
     """
-    Acción continua en [-1,1] = posición objetivo. Smoothing EMA y límite Δpos.
-    Recompensa en log; coste por turnover.
+    Acción [-1,1] = posición objetivo. Smoothing EMA; coste por turnover; recompensa en log.
     """
     metadata = {"render.modes": []}
 
@@ -419,7 +399,7 @@ class TradingEnvCont(gym.Env if gym is not None else object):
         self.smooth_pos = 0.0
 
         fdim = X.shape[1]
-        extra_dim = 2  # vol realizada + alpha reciente
+        extra_dim = 2
         self.p_alpha = p_alpha if p_alpha is not None else np.full(len(self.P), np.nan, dtype=np.float32)
 
         low = -np.inf * np.ones((self.W, fdim + extra_dim), dtype=np.float32)
@@ -479,10 +459,29 @@ FEATURES = [
     "BvB_Total","BvB_NormBulls","BvB_NormBears",
 ]
 
+def plot_bvb(df: pd.DataFrame, cfg: Config, outdir: str = "artifacts/bvb") -> None:
+    """Guarda CSV + PNG de BvB (por qué: inspección visual de señales)."""
+    os.makedirs(outdir, exist_ok=True)
+    cols = ["BvB_Total","BvB_Bullish","BvB_Bearish","BvB_NormBulls","BvB_NormBears"]
+    df[cols].to_csv(os.path.join(outdir, "bvb_series.csv"))
+
+    plt.figure()
+    df["BvB_Total"].plot(title=f"BvB_Total ({cfg.ticker})")
+    # marcas (por qué: ver extremos señalados por tline)
+    bull_idx = df.index[df["BvB_Bullish"] == 1]
+    bear_idx = df.index[df["BvB_Bearish"] == 1]
+    # usar defaults (sin colores forzados)
+    plt.scatter(bull_idx, df.loc[bull_idx, "BvB_Total"])
+    plt.scatter(bear_idx, df.loc[bear_idx, "BvB_Total"])
+    plt.tight_layout(); plt.savefig(os.path.join(outdir, "bvb_total.png")); plt.close()
+
 def run_ml(cfg: Config) -> Tuple[pd.DataFrame, pd.Series]:
     set_seeds(cfg.seed)
     raw = fetch_ohlcv(cfg)
     df = add_features(raw, cfg)
+    if cfg.plot_bvb:
+        plot_bvb(df, cfg, outdir="artifacts/bvb")
+
     labels = triple_barrier_labels(df["Close"], horizon=cfg.horizon, k=cfg.barrier_mult, vol=df["Volatility20"])
     df["y"] = labels
 
@@ -569,38 +568,27 @@ def plot_equity_and_drawdown(close: pd.Series, proba: pd.Series, thr: float, fee
     net = (pos * ret) - pos.diff().abs().fillna(0.0) * ((fees_bps + slippage_bps)/1e4)
     equity = (1 + net).cumprod()
     dd = compute_drawdown(equity)
-
     os.makedirs(outdir, exist_ok=True)
     plt.figure(); equity.plot(title="Equity curve (long-only, ML)"); plt.xlabel("Fecha"); plt.ylabel("Equity")
     plt.tight_layout(); plt.savefig(os.path.join(outdir, "equity_curve.png")); plt.close()
-
     plt.figure(); dd.plot(title="Drawdown"); plt.xlabel("Fecha"); plt.ylabel("Drawdown")
     plt.tight_layout(); plt.savefig(os.path.join(outdir, "drawdown.png")); plt.close()
-
     return bt
 
 def plot_roc_pr(y_true: pd.Series, y_score: pd.Series, outdir: str) -> Dict[str, float]:
     mask = (~y_score.isna())
     y = y_true[mask].astype(int).values
     s = y_score[mask].astype(float).values
-
-    fpr, tpr, _ = roc_curve(y, s)
-    roc_auc = auc(fpr, tpr)
-    precision, recall, _ = precision_recall_curve(y, s)
-    ap = average_precision_score(y, s)
-
+    fpr, tpr, _ = roc_curve(y, s); roc_auc = auc(fpr, tpr)
+    precision, recall, _ = precision_recall_curve(y, s); ap = average_precision_score(y, s)
     plt.figure(); plt.plot(fpr, tpr); plt.plot([0,1], [0,1], linestyle="--")
     plt.title(f"ROC (AUC={roc_auc:.3f})"); plt.xlabel("FPR"); plt.ylabel("TPR")
     plt.tight_layout(); plt.savefig(os.path.join(outdir, "roc.png")); plt.close()
-
     plt.figure(); plt.plot(recall, precision)
     plt.title(f"Precision-Recall (AP={ap:.3f})"); plt.xlabel("Recall"); plt.ylabel("Precision")
     plt.tight_layout(); plt.savefig(os.path.join(outdir, "pr.png")); plt.close()
-
-    thr = 0.5
-    yhat = (s >= thr).astype(int)
-    cm = confusion_matrix(y, yhat)
-    rep = classification_report(y, yhat, zero_division=0, output_dict=True)
+    thr = 0.5; yhat = (s >= thr).astype(int)
+    cm = confusion_matrix(y, yhat); rep = classification_report(y, yhat, zero_division=0, output_dict=True)
     pd.DataFrame(cm, index=["True 0","True 1"], columns=["Pred 0","Pred 1"]).to_csv(os.path.join(outdir, "confusion_0.5.csv"))
     pd.DataFrame(rep).to_csv(os.path.join(outdir, "class_report_0.5.csv"))
     return {"roc_auc": float(roc_auc), "pr_ap": float(ap)}
@@ -642,7 +630,9 @@ def generate_report(
     threshold: float,
     fees_bps: float,
     slippage_bps: float,
-    outdir: str = "artifacts/report"
+    outdir: str = "artifacts/report",
+    df_bvb: Optional[pd.DataFrame] = None,
+    cfg: Optional[Config] = None
 ) -> None:
     os.makedirs(outdir, exist_ok=True)
     y = triple_barrier_labels(close, horizon=horizon, k=barrier_mult, vol=vol20)
@@ -650,6 +640,9 @@ def generate_report(
     curves = plot_roc_pr(y, proba, outdir)
     plot_calibration(y, proba, outdir)
     sweep = threshold_sweep(close, proba, fees_bps, slippage_bps, outdir)
+    # BvB extra en el reporte (por qué: pediste visualizarlo)
+    if df_bvb is not None and cfg is not None:
+        plot_bvb(df_bvb, cfg, outdir=os.path.join(outdir, "bvb"))
 
     with open(os.path.join(outdir, "report_summary.json"), "w") as f:
         json.dump({
@@ -666,6 +659,7 @@ def generate_report(
             "- roc.png, pr.png, confusion_0.5.csv, class_report_0.5.csv\n"
             "- calibration.png, calibration_bins.csv\n"
             "- sweep_cagr.png, sweep_sharpe.png, threshold_sweep.csv\n"
+            "- bvb/bvb_total.png, bvb/bvb_series.csv\n"
             "- report_summary.json\n"
         )
 
@@ -675,6 +669,8 @@ def run_report() -> None:
         return
     with open("artifacts/summary_ml.json","r") as f:
         summ = json.load(f)
+    cfg = Config(**summ["config"])  # por qué: reutilizar params BvB
+
     proba = pd.read_csv("artifacts/probabilities_ml.csv", index_col=0).iloc[:,0]
     proba.index = pd.to_datetime(proba.index)
     proba.name = "proba"
@@ -684,23 +680,28 @@ def run_report() -> None:
     except Exception:
         print("yfinance no instalado.")
         return
-    df = yf.download(summ["config"]["ticker"], start=summ["config"]["start_date"], end=summ["config"].get("end_date"))
-    df = df[["Close"]].copy()
+    df = yf.download(cfg.ticker, start=cfg.start_date, end=cfg.end_date)
+    df = df[["Open","High","Low","Close","Volume"]].copy()
     df["LogRet"] = np.log(df["Close"]).diff().fillna(0)
     df["Volatility20"] = df["LogRet"].rolling(20).std().fillna(0)
     df = df.reindex(proba.index).dropna()
     proba = proba.reindex(df.index)
 
+    # BvB para el reporte
+    df_bvb = add_features(df, cfg)[["BvB_Total","BvB_Bullish","BvB_Bearish","BvB_NormBulls","BvB_NormBears"]]
+
     generate_report(
         close=df["Close"],
         vol20=df["Volatility20"],
         proba=proba,
-        horizon=int(summ["config"]["horizon"]),
-        barrier_mult=float(summ["config"]["barrier_mult"]),
-        threshold=float(summ["config"]["proba_threshold"]),
-        fees_bps=float(summ["config"]["fees_bps"]),
-        slippage_bps=float(summ["config"]["slippage_bps"]),
-        outdir="artifacts/report"
+        horizon=int(cfg.horizon),
+        barrier_mult=float(cfg.barrier_mult),
+        threshold=float(cfg.proba_threshold),
+        fees_bps=float(cfg.fees_bps),
+        slippage_bps=float(cfg.slippage_bps),
+        outdir="artifacts/report",
+        df_bvb=df_bvb,
+        cfg=cfg
     )
     print("Reporte generado en artifacts/report/")
 
@@ -720,6 +721,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--bvb_len", type=int)
     p.add_argument("--bvb_bars_back", type=int)
     p.add_argument("--bvb_tline", type=float)
+    # BvB plot flag
+    p.add_argument("--plot-bvb", action="store_true")
     return p.parse_args()
 
 
@@ -734,17 +737,21 @@ def main():
     if args.bvb_len: cfg.bvb_len = args.bvb_len
     if args.bvb_bars_back: cfg.bvb_bars_back = args.bvb_bars_back
     if args.bvb_tline: cfg.bvb_tline = args.bvb_tline
+    if args.plot_bvb: cfg.plot_bvb = True
 
     print(f"Config: {cfg}")
     if args.run == "ml":
         run_ml(cfg)
     elif args.run == "rl":
         df = add_features(fetch_ohlcv(cfg), cfg)
+        if cfg.plot_bvb:
+            plot_bvb(df, cfg, outdir="artifacts/bvb")
         run_rl(cfg, df, None)
     elif args.run == "report":
         run_report()
     else:
-        run_hybrid(cfg)
+        df, proba = run_ml(cfg)
+        run_rl(cfg, df, proba)
 
 
 if __name__ == "__main__":
