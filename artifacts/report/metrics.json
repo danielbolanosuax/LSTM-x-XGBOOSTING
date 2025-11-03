@@ -1,0 +1,37 @@
+{
+  "global": {
+    "roc_auc": 0.4876430489150887,
+    "pr_auc": 0.6411363726017958,
+    "brier": 0.3574050835131092,
+    "logloss": 1.2699314791638439
+  },
+  "confmat_cfg_thr": {
+    "thr": 0.6,
+    "TP": 571,
+    "FP": 340,
+    "TN": 473,
+    "FN": 890,
+    "precision": 0.6267837541163557,
+    "recall": 0.39082819986310746,
+    "f1": 0.48145025295109617
+  },
+  "confmat_bestF1": {
+    "thr": 0.0003745791618712,
+    "TP": 1457,
+    "FP": 807,
+    "TN": 6,
+    "FN": 4,
+    "precision": 0.6435512367491166,
+    "recall": 0.9972621492128679,
+    "f1": 0.7822818791946309
+  },
+  "bestF1_thr": 0.0003745791618712,
+  "backtest_cfg": {},
+  "backtest_best": {},
+  "meta": {
+    "label_source": "probabilities_ml.csv",
+    "join_key": "date",
+    "proba_col": "proba",
+    "price_src": null
+  }
+}

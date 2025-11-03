@@ -143,17 +143,12 @@ def _fetch_stooq(cfg: Config) -> pd.DataFrame:
     df = pd.read_csv(url)
     if df.empty:
         raise RuntimeError("Stooq devolvió vacío")
-    # Normaliza columnas
     df.columns = [c.title() for c in df.columns]
     if "Date" in df.columns:
         df["Date"] = pd.to_datetime(df["Date"])
         df.set_index("Date", inplace=True)
-    cols_map = {
-        "Open": "Open", "High": "High", "Low": "Low", "Close": "Close", "Volume": "Volume"
-    }
-    df = df.rename(columns=cols_map)
-    df = df[["Open", "High", "Low", "Close", "Volume"]]
-    # Fechas
+    cols_map = {"Open": "Open", "High": "High", "Low": "Low", "Close": "Close", "Volume": "Volume"}
+    df = df.rename(columns=cols_map)[["Open", "High", "Low", "Close", "Volume"]]
     df = df.sort_index()
     df = df[df.index >= pd.to_datetime(cfg.start_date)]
     if cfg.end_date:
@@ -217,13 +212,11 @@ def fetch_ohlcv(cfg: Config) -> pd.DataFrame:
             except Exception as e:
                 msg = str(e)
                 log_warn(f"AV intento '{step}' falló: {msg}")
-                # Rate limit → espera breve y reintenta el otro modo
                 if "Please consider" in msg or "exceeded" in msg.lower():
                     time.sleep(12)
         return None
 
     def try_yahoo() -> Optional[pd.DataFrame]:
-        # Import perezoso si el import global falló
         yf = _yf
         if yf is None:
             try:
@@ -234,17 +227,12 @@ def fetch_ohlcv(cfg: Config) -> pd.DataFrame:
         t0 = log_step(1, 6, f"Descargando Yahoo ({cfg.ticker})")
         try:
             df = yf.download(
-                cfg.ticker,
-                start=cfg.start_date,
-                end=cfg.end_date,
-                auto_adjust=True,
-                progress=False,
-                threads=False,
+                cfg.ticker, start=cfg.start_date, end=cfg.end_date,
+                auto_adjust=True, progress=False, threads=False,
             )
             if df is None or df.empty:
                 raise RuntimeError("Yahoo devolvió vacío")
-            df = df.rename(columns=str.title)
-            df = df[["Open", "High", "Low", "Close", "Volume"]]
+            df = df.rename(columns=str.title)[["Open", "High", "Low", "Close", "Volume"]]
             df = _clean(df)
             log_ok(t0, f"{len(df)} barras")
             return df
@@ -262,7 +250,6 @@ def fetch_ohlcv(cfg: Config) -> pd.DataFrame:
             log_warn(f"Stooq fallo: {e!r}")
             return None
 
-    order: List[str]
     src = cfg.data_source.lower()
     if src == "auto":
         order = ["av", "yahoo", "stooq"]
@@ -280,7 +267,6 @@ def fetch_ohlcv(cfg: Config) -> pd.DataFrame:
         else:
             df = try_stooq()
         if df is not None:
-            # Cache CSV (sin pyarrow)
             _write_cache_csv(df, _cache_path(cfg))
             print(f"    [OK] Proveedor usado: {provider.upper()}", flush=True)
             return df
@@ -344,7 +330,6 @@ def add_features(raw: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     df["Return"] = df["Close"].pct_change().fillna(0.0)
     df["LogRet"] = np.log(df["Close"]).diff().fillna(0.0)
 
-    # Momentum
     df["RSI"] = rsi_ema(df["Close"], 14)
     macd_line, macd_sig, macd_hist = macd(df["Close"], 12, 26, 9)
     df["MACD"] = macd_line
@@ -354,15 +339,11 @@ def add_features(raw: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     df["StochK"] = st_k
     df["StochD"] = st_d
 
-    # Volatilidad
     df["Volatility20"] = df["LogRet"].rolling(20, min_periods=5).std()
-
-    # Tendencia
     df["MA20"] = df["Close"].rolling(20).mean()
     df["MA50"] = df["Close"].rolling(50).mean()
     df["MA200"] = df["Close"].rolling(200).mean()
 
-    # Bulls vs Bears
     bvb_total, bvb_bullish, bvb_bearish = bulls_bears_tv(
         df["High"], df["Low"], df["Close"],
         length=cfg.bvb_len, bars_back=cfg.bvb_bars_back, tline=cfg.bvb_tline
@@ -371,7 +352,6 @@ def add_features(raw: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     df["BvB_Bullish"] = bvb_bullish
     df["BvB_Bearish"] = bvb_bearish
 
-    # Limpieza
     df = df.dropna().copy()
     log_ok(t0, f"{len(df)} filas")
     return df
@@ -447,14 +427,14 @@ def build_xy(df: pd.DataFrame, cfg: Config) -> Tuple[pd.DataFrame, pd.Series, pd
     log_ok(t0)
     X = df[FEATURES].copy()
     idx = df.index
-    # sincroniza
     y = y.reindex(idx)
     mask = (~X.isna().any(axis=1)) & (~y.isna())
     X = X[mask]
     y = y[mask]
     return X, y, idx[mask]
 
-def time_series_oof_prob(X: pd.DataFrame, y: pd.Series, n_splits: int = 5, random_state: int = 42) -> pd.Series:
+def time_series_oof_prob(X: pd.DataFrame, y: pd.Series, n_splits: int = 5, random_state: int = 42) -> Tuple[pd.Series, pd.Series]:
+    """Devuelve proba OOF y número de fold por fila."""
     if XGBClassifier is None:
         raise RuntimeError("xgboost no está instalado.")
     from sklearn.model_selection import TimeSeriesSplit
@@ -464,7 +444,8 @@ def time_series_oof_prob(X: pd.DataFrame, y: pd.Series, n_splits: int = 5, rando
 
     t0 = log_step(4, 6, f"Entrenando (TimeSeriesSplit={n_splits})")
     tscv = TimeSeriesSplit(n_splits=n_splits)
-    proba = pd.Series(index=X.index, dtype=float)
+    proba = pd.Series(index=X.index, dtype=float, name="proba")
+    fold_ser = pd.Series(index=X.index, dtype="Int64", name="fold")
     aucs, aps = [], []
 
     for fold, (tr, te) in enumerate(tscv.split(X), 1):
@@ -490,26 +471,22 @@ def time_series_oof_prob(X: pd.DataFrame, y: pd.Series, n_splits: int = 5, rando
         model.fit(Xtr, ytr)
         p = model.predict_proba(Xte)[:, 1]
         proba.iloc[te] = p
+        fold_ser.iloc[te] = fold  # por análisis por split
         try:
             aucs.append(roc_auc_score(yte, p))
             aps.append(average_precision_score(yte, p))
         except Exception:
             pass
 
-    extra = ""
-    if aucs and aps:
-        extra = f"AUC mean={np.mean(aucs):.3f} AP mean={np.mean(aps):.3f}"
+    extra = f"AUC mean={np.mean(aucs):.3f} AP mean={np.mean(aps):.3f}" if aucs and aps else ""
     log_ok(t0, extra)
-    proba.name = "proba"
-    return proba
+    return proba, fold_ser
 
 
 # ====== BvB export ======
 def save_bvb(df: pd.DataFrame, outdir: pathlib.Path) -> None:
     outdir.mkdir(parents=True, exist_ok=True)
-    # CSV
     df[["BvB_Total", "BvB_Bullish", "BvB_Bearish"]].to_csv(outdir / "bvb_series.csv")
-    # PNG
     import matplotlib.pyplot as plt
     plt.figure()
     df["BvB_Total"].plot(title="BvB_Total")
@@ -535,18 +512,34 @@ def run_ml(cfg: Config) -> Tuple[pd.DataFrame, pd.Series]:
     # 3) dataset + labels
     X, y, y_index = build_xy(df, cfg)
 
-    # 4) entrenamiento OOF
-    proba = time_series_oof_prob(X, y, n_splits=cfg.test_splits, random_state=cfg.seed)
-    proba = proba.reindex(df.index)
+    # 4) entrenamiento OOF (guardamos fold)
+    proba_oof, fold_oof = time_series_oof_prob(X, y, n_splits=cfg.test_splits, random_state=cfg.seed)
 
     # 5) artifacts
     t0 = log_step(5, 6, "Guardando artifacts")
     art = _artifacts_dir()
-    # probabilidades
+
+    # ====== GUARDAR PROBABILIDADES + ETIQUETA + FOLD ======
+    dates = pd.to_datetime(X.index)
+    assert len(dates) == len(proba_oof) == len(y) == len(fold_oof), "dates/proba/y_true/fold no cuadran"
+    assert proba_oof.index.equals(y.index) and y.index.equals(fold_oof.index), "Índices temporales no alinean"
+
+    proba_df = pd.DataFrame({
+        "date": dates.to_series().reset_index(drop=True),
+        "proba": pd.Series(proba_oof, dtype=float).reset_index(drop=True),
+        "y_true": pd.Series(y, dtype=int).reset_index(drop=True),
+        "fold": pd.Series(fold_oof, dtype="Int64").reset_index(drop=True),
+    })
+
     prob_path = art / "probabilities_ml.csv"
-    proba.to_frame("proba").to_csv(prob_path)
+    proba_df.to_csv(prob_path, index=False, encoding="utf-8")
+    print("    OK (proba→probabilities_ml.csv con y_true + fold)  filas=", len(proba_df))
+
+    # Backtest sobre toda la serie de precios
+    proba_bt = proba_oof.reindex(df.index)
+    backtest = backtest_long_only(df["Close"], proba_bt, cfg.proba_threshold, cfg.fees_bps, cfg.slippage_bps)
+
     # summary
-    backtest = backtest_long_only(df["Close"], proba, cfg.proba_threshold, cfg.fees_bps, cfg.slippage_bps)
     summary = {
         "config": asdict(cfg),
         "avg_metrics": {},
@@ -554,14 +547,13 @@ def run_ml(cfg: Config) -> Tuple[pd.DataFrame, pd.Series]:
     }
     with open(art / "summary_ml.json", "w") as f:
         json.dump(summary, f, indent=2)
-    # BvB (opcional)
+
     if cfg.plot_bvb:
         save_bvb(df, art / "bvb")
     log_ok(t0, f"proba→{prob_path.name}")
 
-    # 6) fin
     log_step(6, 6, "Listo.")
-    return df, proba
+    return df, proba_bt
 
 
 def run_report(cfg: Config) -> None:
@@ -571,7 +563,6 @@ def run_report(cfg: Config) -> None:
         print("Tip: ejecuta desde el raíz del repo:  python project\\hybrid_trader.py --run report", flush=True)
         return
 
-    # Cargar artifacts
     summ_path = pathlib.Path("artifacts/summary_ml.json")
     proba_path = pathlib.Path("artifacts/probabilities_ml.csv")
     if not summ_path.exists() or not proba_path.exists():
@@ -579,8 +570,8 @@ def run_report(cfg: Config) -> None:
         return
 
     try:
-        summ = _reporting.load_summary(str(summ_path))
-        proba = _reporting.load_probabilities(str(proba_path))
+        _ = _reporting.load_summary(str(summ_path))
+        _ = _reporting.load_probabilities(str(proba_path))
         t0 = log_step(1, 1, "Generando reporte (equity, drawdown, ROC/PR, calibración, sweep)")
         _reporting.main()
         log_ok(t0, "reporte en artifacts/report/")
@@ -589,7 +580,7 @@ def run_report(cfg: Config) -> None:
 
 
 def run_hybrid(cfg: Config) -> None:
-    df, proba = run_ml(cfg)
+    _, _ = run_ml(cfg)
     print("Nota: Modo HYBRID — RL opcional no ejecutado en esta versión.", flush=True)
 
 
@@ -652,3 +643,45 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# path: tests/test_probabilities_csv.py
+import os
+import pathlib
+import pandas as pd
+
+ART = pathlib.Path("artifacts")
+CSV = ART / "probabilities_ml.csv"
+
+def test_csv_exists_and_columns():
+    assert CSV.exists(), "Ejecuta primero el entrenamiento para generar artifacts/probabilities_ml.csv"
+    df = pd.read_csv(CSV)
+    expected = {"date", "proba", "y_true", "fold"}
+    assert expected.issubset(df.columns), f"Faltan columnas: {expected - set(df.columns)}"
+    assert len(df) > 0, "CSV vacío"
+
+def test_types_ranges_and_order():
+    df = pd.read_csv(CSV)
+    # date parseable y ordenado
+    dates = pd.to_datetime(df["date"], errors="raise")
+    assert dates.is_monotonic_increasing, "Las fechas no están en orden ascendente"
+
+    # proba en [0,1] y no NaN
+    assert df["proba"].notna().all(), "NaN en proba"
+    assert ((df["proba"] >= 0.0) & (df["proba"] <= 1.0)).all(), "proba fuera de [0,1]"
+
+    # y_true ∈ {0,1}
+    y = df["y_true"]
+    assert y.notna().all(), "NaN en y_true"
+    uniq = set(int(v) for v in y.unique())
+    assert uniq.issubset({0, 1}), f"Valores inválidos en y_true: {uniq}"
+
+    # fold entero positivo (al menos 1 fold)
+    fold = pd.Series(df["fold"]).astype("Int64")
+    assert fold.notna().all(), "NaN en fold"
+    assert (fold >= 1).all(), "fold debe ser >=1"
+    assert fold.nunique() >= 1, "fold único insuficiente"
+
+def test_alignment_lengths():
+    df = pd.read_csv(CSV)
+    assert len(df["date"]) == len(df["proba"]) == len(df["y_true"]) == len(df["fold"]), "Longitudes no cuadran"
