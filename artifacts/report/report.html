@@ -1,7 +1,87 @@
-<!doctype html><html><head><meta charset="utf-8">
-<title>Reporte LITE</title><style>body{font-family:Inter,system-ui,Segoe UI,Arial; margin:24px}</style></head><body>
-<h1>Reporte LITE</h1>
-<p>No se encontró etiqueta <code>y_true</code> en ningún CSV de <code>artifacts/</code>.</p>
-<p class="small">No encuentro columna de etiqueta (<code>y_true</code> / <code>y</code> / <code>target</code> / <code>label</code>).</p>
-<p>Genera el entrenamiento o aplica el parche de guardado de etiquetas para un reporte completo.</p>
-</body></html>
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><title>Reporte ML / BvB</title>
+    <style>
+    body{font-family:Inter,system-ui,Segoe UI,Arial;margin:24px;color:#111}
+    h1{margin:0 0 8px}
+    .meta{color:#777;margin-bottom:16px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px}
+    .card{border:1px solid #eee;border-radius:12px;padding:12px;box-shadow:0 4px 8px rgba(0,0,0,.04)}
+    .card h3{margin:0 0 8px}
+    .kv{font-size:14px;line-height:1.6}
+    .muted{color:#777;font-size:12px}
+    .img{width:100%;height:auto;border:1px solid #eee;border-radius:8px}
+    </style>
+    </head>
+<body>
+  <h1>Reporte Técnico</h1>
+  <div class="meta">Generado: 2025-11-03 16:19:59</div>
+
+  <div class="card">
+    <h3>Config (detectada)</h3>
+    <div class="kv">
+      Ticker: AAPL<br/>
+      Start: 2016-01-01<br/>
+      Fuente: auto<br/>
+      Prob. threshold (cfg): 0.6000<br/>
+      Label source: probabilities_ml.csv
+    </div>
+  </div>
+
+  <div class="grid">
+    
+      <div class="card">
+        <h3>Métricas globales</h3>
+        <div class="kv">
+          ROC-AUC: 0.4671<br/>
+          PR-AUC: 0.5885<br/>
+          Brier: 0.3961<br/>
+          LogLoss: 1.4388<br/>
+        </div>
+      </div>
+    
+    
+        <div class="card">
+          <h3>Confusión (thr=cfg)</h3>
+          <div class="kv">
+            TP: 507 &nbsp; FP: 404<br/>
+            TN: 384 &nbsp; FN: 600<br/>
+            Precision: 0.5565<br/>
+            Recall: 0.4580<br/>
+            F1: 0.5025<br/>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Confusión (thr=bestF1)</h3>
+          <div class="kv">
+            TP: 1107 &nbsp; FP: 787<br/>
+            TN: 1 &nbsp; FN: 0<br/>
+            Precision: 0.5845<br/>
+            Recall: 1.0000<br/>
+            F1: 0.7378<br/>
+          </div>
+        </div>
+        
+  </div>
+
+  <div class="grid">
+    <div class="card"><h3>Histograma de probabilidades</h3><img class="img" src="img/hist.png" /></div>
+    <div class="card"><h3>Curva ROC</h3><img class="img" src="img/roc.png" /></div>
+    <div class="card"><h3>Curva PR</h3><img class="img" src="img/pr.png" /></div>
+    <div class="card"><h3>Calibración</h3><img class="img" src="img/calib.png" /></div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h3>Precio + señales (thr=cfg)</h3><img class="img" src="img/price_thr_cfg.png" /></div>
+    <div class="card"><h3>Precio + señales (thr=bestF1)</h3><img class="img" src="img/price_thr_bestf1.png" /></div>
+  </div>
+
+  <div class="card">
+    <h3>Notas</h3>
+    <ul class="muted">
+      <li>Si quieres métricas completas y matrices de confusión, guarda <code>y_true</code> junto con <code>proba</code> en <code>probabilities_ml.csv</code>.</li>
+      <li>Las señales BUY/SELL marcan cambios de estado de predicción (0→1 y 1→0) sobre el precio.</li>
+    </ul>
+  </div>
+</body>
+</html>
