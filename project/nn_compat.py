@@ -19,8 +19,7 @@ except Exception:
         _BACKEND = "keras"
     except Exception as e:
         raise ImportError(
-            "No hay backend Keras.\n"
-            "Instala TensorFlow 2.x:  python -m pip install tensorflow==2.20.*"
+            "No hay backend Keras. Instala TensorFlow 2.x:  python -m pip install tensorflow==2.20.*"
         ) from e
 
 Sequential = _models.Sequential

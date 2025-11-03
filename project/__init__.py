@@ -1,2 +1,3 @@
 # path: project/__init__.py
-"""Marca 'project' como paquete importable (necesario para pytest y VSCode)."""
+"""Paquete 'project' (necesario para imports/pytest)."""
+# No es necesario agregar código aquí.

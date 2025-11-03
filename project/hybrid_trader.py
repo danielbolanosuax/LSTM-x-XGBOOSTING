@@ -1,18 +1,18 @@
 # path: project/hybrid_trader.py
 from __future__ import annotations
 
-# --- Fix SSL/certificados y evitar curl_cffi en yfinance (por qué: rutas con acentos rompen curl en Windows) ---
+# ==== FIX SSL/yfinance (Windows rutas con acentos) ====
 import os as _os
 try:
     import certifi as _certifi
-    _os.environ.setdefault("YFINANCE_USE_CURL_CFFI", "0")
+    _os.environ["YFINANCE_USE_CURL_CFFI"] = "0"  # forzar requests clásico
     _ca = _certifi.where()
     _os.environ.setdefault("SSL_CERT_FILE", _ca)
     _os.environ.setdefault("CURL_CA_BUNDLE", _ca)
 except Exception:
     pass
 
-# --- Preferir gymnasium; caer a gym si no está (por qué: SB3≥2.0 usa gymnasium) ---
+# gymnasium preferido; fallback a gym
 try:
     import gymnasium as gym
     from gymnasium import spaces
@@ -24,14 +24,9 @@ except Exception:
         gym = None
         spaces = None
 
-import math
-import json
-import time
-import argparse
-import warnings
+import math, json, time, argparse, warnings
 from dataclasses import dataclass
 from typing import Optional, Tuple, Iterable, Dict, List
-
 import numpy as np
 import pandas as pd
 
@@ -62,13 +57,11 @@ try:
 except Exception:
     yf = None
 
-# Reporting
 import matplotlib.pyplot as plt
 from sklearn.metrics import (
     roc_curve, auc, precision_recall_curve, average_precision_score,
     confusion_matrix, classification_report
 )
-
 warnings.filterwarnings("ignore")
 
 
@@ -95,7 +88,7 @@ class Config:
     action_smooth_tau: float = 0.2
     max_pos_change: float = 0.3
     vol_target: float = 0.2
-    # Alpha Vantage
+    # Fuente de datos
     alpha_vantage_key_env: str = "ALPHA_VANTAGE_KEY"
     av_key: Optional[str] = None
     data_source: str = "av"         # "av" | "yahoo"
@@ -111,7 +104,6 @@ def set_seeds(seed: int) -> None:
     _os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
 
-
 def choose_scaler(kind: str):
     return StandardScaler() if kind == "standard" else MinMaxScaler()
 
@@ -120,16 +112,20 @@ def choose_scaler(kind: str):
 # Datos + Features
 # =======================
 def fetch_ohlcv(cfg: Config) -> pd.DataFrame:
-    """Preferir Alpha Vantage (Daily Adjusted); fallback yfinance."""
+    """Alpha Vantage (preferente) con fallback robusto a yfinance. Valida DF no vacío."""
     def _clean(df: pd.DataFrame) -> pd.DataFrame:
-        df.index = pd.to_datetime(df.index); df = df.sort_index()
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()
         df = df[df.index >= pd.to_datetime(cfg.start_date)]
         if cfg.end_date:
             df = df[df.index <= pd.to_datetime(cfg.end_date)]
-        req = ["Open","High","Low","Close","Volume"]
-        if any(c not in df.columns for c in req):
+        cols = ["Open","High","Low","Close","Volume"]
+        if any(c not in df.columns for c in cols):
             raise RuntimeError("Faltan columnas OHLCV")
-        return df.dropna()
+        df = df[cols].dropna()
+        if df.empty:
+            raise RuntimeError("Sin datos OHLCV tras limpieza")
+        return df
 
     key = (cfg.av_key or _os.getenv(cfg.alpha_vantage_key_env, "")).strip()
     if cfg.data_source.lower() == "av" and key and TimeSeries is not None:
@@ -143,23 +139,30 @@ def fetch_ohlcv(cfg: Config) -> pd.DataFrame:
                         "4. close":"Close","5. adjusted close":"Adj Close","6. volume":"Volume"
                     })
                     if "Adj Close" in data.columns:
-                        data["Close"] = data["Adj Close"]
+                        data["Close"] = data["Adj Close"]  # why: evita saltos por splits/divs
                 else:
-                    data, _ = ts.get_daily(symbol=cfg.ticker, outputsize="full")
-                    data = data.rename(columns={
-                        "1. open":"Open","2. high":"High","3. low":"Low","4. close":"Close","5. volume":"Volume"
-                    })
-                df = data[["Open","High","Low","Close","Volume"]]
-                return _clean(df)
+                    raise Exception("skip_adjusted")
+                return _clean(data)
             except Exception as e:
+                msg = str(e).lower()
+                if "premium" in msg or "skip_adjusted" in msg or "invalid" in msg:
+                    try:
+                        data, _ = ts.get_daily(symbol=cfg.ticker, outputsize="full")
+                        data = data.rename(columns={
+                            "1. open":"Open","2. high":"High","3. low":"Low","4. close":"Close","5. volume":"Volume"
+                        })
+                        return _clean(data)
+                    except Exception:
+                        pass
                 if attempt < 2:
-                    time.sleep(15)  # por qué: rate-limit free
-                else:
-                    print(f"[AlphaVantage] fallo: {e}")
+                    time.sleep(15)
+                    continue
+                print(f"[AlphaVantage] fallo definitivo: {e}")
 
     if yf is not None:
         try:
-            df = yf.download(cfg.ticker, start=cfg.start_date, end=cfg.end_date, auto_adjust=True)
+            df = yf.download(cfg.ticker, start=cfg.start_date, end=cfg.end_date,
+                             auto_adjust=True, progress=False, threads=False)
             df = df.rename(columns=str.title)[["Open","High","Low","Close","Volume"]]
             return _clean(df)
         except Exception as e:
@@ -167,10 +170,8 @@ def fetch_ohlcv(cfg: Config) -> pd.DataFrame:
 
     raise RuntimeError("No se pudieron obtener datos OHLCV con AV ni yfinance.")
 
-
 def ema(s: pd.Series, span: int) -> pd.Series:
     return s.ewm(span=span, adjust=False).mean()
-
 
 def rsi_ema(close: pd.Series, n: int = 14) -> pd.Series:
     d = close.diff()
@@ -180,33 +181,28 @@ def rsi_ema(close: pd.Series, n: int = 14) -> pd.Series:
     rs = roll_up / (roll_dn + 1e-12)
     return 100 - (100 / (1 + rs))
 
-
-def macd(close: pd.Series) -> Tuple[pd.Series, pd.Series, pd.Series]:
+def macd(close: pd.Series):
     fast = ema(close, 12); slow = ema(close, 26)
     line = fast - slow; sig = ema(line, 9); hist = line - sig
     return line, sig, hist
-
 
 def stochastic_kd(h: pd.Series, l: pd.Series, c: pd.Series, n: int = 14):
     lo = l.rolling(n).min(); hi = h.rolling(n).max()
     k = 100 * (c - lo) / (hi - lo + 1e-12); d = k.rolling(3).mean()
     return k, d
 
-
 def bulls_bears(close: pd.Series, high: pd.Series, low: pd.Series, length: int, bars_back: int):
     ma = ema(close, length)
     bulls = high - ma; bears = ma - low
-    mb = bulls.rolling(bars_back).min(); xb = bulls.rolling(bars_back).max()
-    nb = ((bulls - mb) / (xb - mb + 1e-12) - 0.5) * 100.0
-    mb2 = bears.rolling(bars_back).min(); xb2 = bears.rolling(bars_back).max()
-    nr = ((bears - mb2) / (xb2 - mb2 + 1e-12) - 0.5) * 100.0
+    min_b = bulls.rolling(bars_back).min(); max_b = bulls.rolling(bars_back).max()
+    nb = ((bulls - min_b) / (max_b - min_b + 1e-12) - 0.5) * 100.0
+    min_r = bears.rolling(bars_back).min(); max_r = bears.rolling(bars_back).max()
+    nr = ((bears - min_r) / (max_r - min_r + 1e-12) - 0.5) * 100.0
     total = nb - nr
     return total, nb, nr
 
-
 def institutional_index(volume: pd.Series, n: int = 50) -> pd.Series:
     return volume / (volume.rolling(n).mean() + 1e-12)
-
 
 def add_features(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     out = df.copy()
@@ -217,28 +213,27 @@ def add_features(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     out["StochK"], out["StochD"] = stochastic_kd(out["High"], out["Low"], out["Close"], 14)
     out["Volatility20"] = out["LogRet"].rolling(20).std().fillna(0)
     out["InstIdx"] = institutional_index(out["Volume"], 50)
-    # Medias móviles (tendencia)
-    out["MA20"]  = out["Close"].rolling(20).mean()
-    out["MA50"]  = out["Close"].rolling(50).mean()
+    out["MA20"] = out["Close"].rolling(20).mean()
+    out["MA50"] = out["Close"].rolling(50).mean()
     out["MA200"] = out["Close"].rolling(200).mean()
-    # BvB
     t, nb, nr = bulls_bears(out["Close"], out["High"], out["Low"], cfg.bvb_len, cfg.bvb_bars_back)
     out["BvB_Total"], out["BvB_NormBulls"], out["BvB_NormBears"] = t, nb, nr
     out["BvB_Bullish"] = (out["BvB_Total"] > cfg.bvb_tline).astype(int)
     out["BvB_Bearish"] = (out["BvB_Total"] < -cfg.bvb_tline).astype(int)
-
     out.replace([np.inf, -np.inf], np.nan, inplace=True)
     out.ffill(inplace=True); out.dropna(inplace=True)
+    if out.empty:
+        raise RuntimeError("Sin datos tras calcular features")
     return out
 
 
 # =======================
-# Labels (triple-barrier)
+# Labels / Split
 # =======================
 def triple_barrier_labels(close: pd.Series, horizon: int, k: float, vol: pd.Series) -> pd.Series:
     labels = np.zeros(len(close), dtype=int)
     c = close.values; sig = vol.fillna(vol.median()).values
-    up_mult = (1 + k * sig); dn_mult = (1 - k * sig)
+    up_mult, dn_mult = (1 + k * sig), (1 - k * sig)
     for i in range(len(c)):
         t_end = min(i + horizon, len(c) - 1)
         up = c[i] * up_mult[i]; dn = c[i] * dn_mult[i]
@@ -250,10 +245,6 @@ def triple_barrier_labels(close: pd.Series, horizon: int, k: float, vol: pd.Seri
     labels[-horizon:] = 0
     return pd.Series(labels, index=close.index)
 
-
-# =======================
-# TimeSeries Split (purged)
-# =======================
 class PurgedWalkForwardSplit:
     def __init__(self, n_splits: int = 5, gap: int = 0):
         self.n_splits = n_splits; self.gap = gap
@@ -268,7 +259,7 @@ class PurgedWalkForwardSplit:
 
 
 # =======================
-# LSTM utils
+# LSTM / Stack XGB
 # =======================
 def make_sequences(X: np.ndarray, y: np.ndarray, window: int) -> Tuple[np.ndarray, np.ndarray]:
     Xs, ys = [], []
@@ -276,18 +267,16 @@ def make_sequences(X: np.ndarray, y: np.ndarray, window: int) -> Tuple[np.ndarra
         Xs.append(X[i-window:i, :]); ys.append(y[i])
     return np.asarray(Xs), np.asarray(ys)
 
-
 def build_lstm(timesteps: int, features: int, lr: float = 1e-3) -> Sequential:
     model = Sequential([
         LSTM(128, return_sequences=True, input_shape=(timesteps, features)),
-        Dropout(0.2),  # por qué: reduce sobreajuste
+        Dropout(0.2),
         LSTM(64),
         Dropout(0.2),
         Dense(1, activation="sigmoid")
     ])
     model.compile(optimizer=Adam(learning_rate=lr), loss="binary_crossentropy", metrics=["accuracy"])
     return model
-
 
 class LstmXgbStack:
     def __init__(self, cfg: Config):
@@ -299,26 +288,19 @@ class LstmXgbStack:
         self.scaler = choose_scaler(self.cfg.scaler_type)
         Xtr = self.scaler.fit_transform(Xtr_df.values)
         Xva = self.scaler.transform(Xva_df.values)
-
         Xtr_seq, ytr_seq = make_sequences(Xtr, ytr, self.cfg.window)
         Xva_seq, yva_seq = make_sequences(Xva, yva, self.cfg.window)
-
         self.lstm = build_lstm(self.cfg.window, Xtr_seq.shape[2])
         es = EarlyStopping(monitor="val_loss", patience=8, restore_best_weights=True)
         self.lstm.fit(Xtr_seq, ytr_seq, validation_data=(Xva_seq, yva_seq),
                       epochs=80, batch_size=64, callbacks=[es], verbose=0)
-
         p_tr = self.lstm.predict(Xtr_seq, verbose=0).ravel()
         p_va = self.lstm.predict(Xva_seq, verbose=0).ravel()
-
         Xtr_al = Xtr[self.cfg.window:, :]; Xva_al = Xva[self.cfg.window:, :]
         ytr_al = ytr[self.cfg.window:];   yva_al = yva[self.cfg.window:]
-
         Xtr_stack = np.c_[Xtr_al, p_tr]; Xva_stack = np.c_[Xva_al, p_va]
-
         pos = ytr_al.sum(); neg = len(ytr_al) - pos
         spw = (neg / max(1, pos)) if pos > 0 else 1.0
-
         self.xgb = xgb.XGBClassifier(
             n_estimators=1000, learning_rate=0.03, max_depth=5,
             subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0,
@@ -339,7 +321,7 @@ class LstmXgbStack:
 
 
 # =======================
-# Métricas + Backtest
+# Métricas / Backtest
 # =======================
 def compute_metrics(y_true: np.ndarray, y_score: np.ndarray, thr: float = 0.5) -> Dict[str, float]:
     m = ~np.isnan(y_score)
@@ -353,7 +335,6 @@ def compute_metrics(y_true: np.ndarray, y_score: np.ndarray, thr: float = 0.5) -
         "roc_auc": roc_auc_score(y_true, y_score),
         "pr_auc": average_precision_score(y_true, y_score)
     }
-
 
 def backtest_long_only(close: pd.Series, proba: pd.Series, threshold: float, fees_bps: float, slippage_bps: float) -> Dict[str, float]:
     proba = proba.fillna(0.0)
@@ -373,14 +354,14 @@ def backtest_long_only(close: pd.Series, proba: pd.Series, threshold: float, fee
 
 
 # =======================
-# RL Env continuo (PPO)
+# RL Env continuo
 # =======================
 class TradingEnvCont(gym.Env if gym is not None else object):
-    """Acción [-1,1] = posición objetivo; smoothing EMA; coste por turnover; recompensa en log."""
+    """Acción [-1,1] = posición objetivo; smoothing; coste por turnover; recompensa log."""
     metadata = {"render.modes": []}
     def __init__(self, X: np.ndarray, prices: np.ndarray, cfg: Config, p_alpha: Optional[np.ndarray] = None):
         if gym is None:
-            raise RuntimeError("Gym/Gymnasium no disponible. `pip install gymnasium` o `gym`.")
+            raise RuntimeError("Gym/Gymnasium no disponible.")
         super().__init__()
         self.cfg = cfg; self.X = X.astype(np.float32); self.P = prices.astype(np.float32)
         self.W = cfg.window; self.t = self.W; self.equity = 1.0; self.pos = 0.0; self.smooth_pos = 0.0
@@ -417,7 +398,7 @@ class TradingEnvCont(gym.Env if gym is not None else object):
 
 
 # =======================
-# Pipeline principal ML/RL
+# Pipeline ML/RL
 # =======================
 FEATURES = [
     "Return","LogRet",
@@ -445,10 +426,8 @@ def run_ml(cfg: Config) -> Tuple[pd.DataFrame, pd.Series]:
     raw = fetch_ohlcv(cfg)
     df = add_features(raw, cfg)
     if cfg.plot_bvb: plot_bvb(df, cfg, outdir="artifacts/bvb")
-
     labels = triple_barrier_labels(df["Close"], cfg.horizon, cfg.barrier_mult, df["Volatility20"])
     df["y"] = labels
-
     X = df[FEATURES].copy(); y = df["y"].astype(int).values; idx = df.index
     splitter = PurgedWalkForwardSplit(n_splits=cfg.test_splits, gap=cfg.gap)
     fold_metrics, fold_preds = [], []
@@ -459,23 +438,19 @@ def run_ml(cfg: Config) -> Tuple[pd.DataFrame, pd.Series]:
         fold_metrics.append(m)
         ser = pd.Series(np.nan, index=idx); ser.iloc[te] = p_te; fold_preds.append(ser)
         print(f"[Fold {fi}] " + ", ".join(f"{k}:{v:.4f}" for k,v in m.items()))
-
     avg = {k: float(np.mean([m[k] for m in fold_metrics])) for k in fold_metrics[0]}
     print("\n=== MÉTRICAS PROMEDIO (walk-forward) ===")
     for k, v in avg.items(): print(f"{k}: {v:.4f}")
-
     all_proba = pd.concat(fold_preds, axis=1).bfill(axis=1).iloc[:,0]
     bt = backtest_long_only(df["Close"], all_proba, cfg.proba_threshold, cfg.fees_bps, cfg.slippage_bps)
     print("\n=== BACKTEST ML (long-only) ===")
     for k, v in bt.items(): print(f"{k}: {v:.4f}")
-
     _os.makedirs("artifacts", exist_ok=True)
     all_proba.to_csv("artifacts/probabilities_ml.csv")
     with open("artifacts/summary_ml.json","w") as f:
         json.dump({"config": cfg.__dict__, "avg_metrics": avg, "backtest": bt}, f, indent=2)
     print("Guardado: artifacts/probabilities_ml.csv, artifacts/summary_ml.json")
     return df, all_proba
-
 
 def run_rl(cfg: Config, df: pd.DataFrame, proba: Optional[pd.Series] = None) -> None:
     if gym is None:
@@ -497,14 +472,13 @@ def run_rl(cfg: Config, df: pd.DataFrame, proba: Optional[pd.Series] = None) -> 
     except Exception as e:
         print(f"No pude entrenar PPO (instala stable-baselines3): {e}")
 
-
 def run_hybrid(cfg: Config) -> None:
     df, proba = run_ml(cfg)
     run_rl(cfg, df, proba)
 
 
 # =======================
-# ======= REPORTING =====
+# Reporting
 # =======================
 def compute_drawdown(equity: pd.Series) -> pd.Series:
     peak = equity.cummax(); return equity/peak - 1.0
@@ -598,19 +572,15 @@ def run_report() -> None:
     with open("artifacts/summary_ml.json","r") as f:
         summ = json.load(f)
     cfg = Config(**summ["config"])
-
     proba = pd.read_csv("artifacts/probabilities_ml.csv", index_col=0).iloc[:,0]
     proba.index = pd.to_datetime(proba.index); proba.name = "proba"
-
-    df = fetch_ohlcv(cfg)  # misma fuente que training
-    # reconstruir Vol20 para labels del reporte
+    df = fetch_ohlcv(cfg)
     tmp = df[["Open","High","Low","Close","Volume"]].copy()
     tmp["LogRet"] = np.log(tmp["Close"]).diff().fillna(0)
     tmp["Volatility20"] = tmp["LogRet"].rolling(20).std().fillna(0)
     tmp = tmp.reindex(proba.index).dropna()
     proba = proba.reindex(tmp.index)
     df_bvb = add_features(df, cfg)[["BvB_Total","BvB_Bullish","BvB_Bearish","BvB_NormBulls","BvB_NormBears"]].reindex(tmp.index)
-
     generate_report(
         close=tmp["Close"], vol20=tmp["Volatility20"], proba=proba,
         horizon=int(cfg.horizon), barrier_mult=float(cfg.barrier_mult),
@@ -628,10 +598,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--run", choices=["ml","rl","hybrid","report"], default="hybrid")
     p.add_argument("--ticker", type=str); p.add_argument("--start", type=str); p.add_argument("--end", type=str)
     p.add_argument("--threshold", type=float); p.add_argument("--rl_steps", type=int)
-    # BvB
     p.add_argument("--bvb_len", type=int); p.add_argument("--bvb_bars_back", type=int); p.add_argument("--bvb_tline", type=float)
     p.add_argument("--plot-bvb", action="store_true")
-    # Fuente de datos
     p.add_argument("--data-source", choices=["av","yahoo"])
     p.add_argument("--av-key", type=str)
     p.add_argument("--no-adjust", action="store_true", help="usar Close sin ajustar (AV)")
@@ -652,7 +620,6 @@ def main():
     if args.data_source: cfg.data_source = args.data_source
     if args.av_key: cfg.av_key = args.av_key
     if args.no_adjust: cfg.use_adjusted_close = False
-
     print(f"Config: {cfg}")
     if args.run == "ml":
         run_ml(cfg)
