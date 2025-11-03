@@ -1,30 +1,23 @@
 :: path: setup_win.bat
 @echo off
 setlocal
-REM Por qué: usar siempre el python del sistema para crear venv y aislar dependencias
-if "%~1"=="" (
-  set PY=python
-) else (
-  set PY=%~1
-)
+:: Por qué: 1-clic para entorno + clave AV + deps
+if "%~1"=="" ( set PY=python ) else ( set PY=%~1 )
 
 echo === creando venv ===
-%PY% -m venv .venv || (echo ERROR creando venv & exit /b 1)
-
+%PY% -m venv .venv || (echo ERROR venv & exit /b 1)
 call .venv\Scripts\activate
-echo === actualizando pip ===
+
+echo === pip/deps ===
 python -m pip install --upgrade pip
+python -m pip install tensorflow==2.20.* numpy pandas scikit-learn xgboost matplotlib yfinance alpha_vantage
+python -m pip install gymnasium stable-baselines3 pytest
 
-echo === instalando paquetes base ===
-python -m pip install tensorflow==2.20.* numpy pandas scikit-learn xgboost yfinance matplotlib
+echo === fijando Alpha Vantage KEY ===
+:: Reemplaza si quieres otra; usaremos la que nos diste ahora
+setx ALPHA_VANTAGE_KEY 6JG5337BHDMKBHEI
 
-echo === (opcional) RL ===
-REM Nota: en Python 3.13 puede fallar gym/sb3. Si falla, usa py -3.11 para el venv.
-python -m pip install gym==0.26.2 stable-baselines3 || echo "saltando RL (puede requerir Python 3.11)"
-
-echo.
-echo Listo. Activa el entorno con:
-echo     .\.venv\Scripts\activate
-echo Luego ejecuta:
-echo     python project\hybrid_trader.py --run hybrid --ticker AAPL --start 2016-01-01
+echo Listo. Ejemplo:
+echo   python project\hybrid_trader.py --run ml --ticker AAPL --start 2016-01-01 --data-source av --plot-bvb
+echo   python project\hybrid_trader.py --run report
 endlocal
