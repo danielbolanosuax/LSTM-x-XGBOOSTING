@@ -1,0 +1,40 @@
+{
+  "config": {
+    "ticker": "AAPL",
+    "start_date": "2016-01-01",
+    "end_date": null,
+    "window": 60,
+    "horizon": 20,
+    "barrier_mult": 2.0,
+    "scaler_type": "standard",
+    "test_splits": 5,
+    "gap": 3,
+    "fees_bps": 5.0,
+    "slippage_bps": 5.0,
+    "proba_threshold": 0.6,
+    "seed": 42,
+    "rl_lambda_risk": 0.0,
+    "rl_steps": 200000,
+    "action_smooth_tau": 0.2,
+    "max_pos_change": 0.3,
+    "vol_target": 0.2,
+    "alpha_vantage_key_env": "ALPHA_VANTAGE_KEY",
+    "av_key": null,
+    "data_source": "auto",
+    "use_adjusted_close": true,
+    "bvb_len": 14,
+    "bvb_bars_back": 120,
+    "bvb_tline": 80.0,
+    "plot_bvb": true,
+    "verbose_train": true,
+    "cache_dir": "data"
+  },
+  "avg_metrics": {},
+  "backtest": {
+    "CAGR": -0.08191680983436789,
+    "Sharpe": -0.003690678372800972,
+    "MaxDD": -0.7579603545609099,
+    "HitRate": 0.21328056288478453,
+    "TurnsPerYear": 20.279683377308707
+  }
+}
